@@ -1,0 +1,9 @@
+[package]
+name = "gps"
+version = "0.1.0"
+authors = ["Michael Pucher <michael.pucher.main@gmail.com>"]
+
+[dependencies]
+regex = "0.2"
+hyper = "0.10"
+multipart = "0.12.0"
