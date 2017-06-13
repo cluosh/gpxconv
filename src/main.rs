@@ -3,18 +3,21 @@ extern crate multipart;
 extern crate regex;
 extern crate flate2;
 extern crate byteorder;
+extern crate glob;
 
 use std::io::Read;
 use std::io::Write;
 use std::io::BufReader;
 use std::io::BufWriter;
 use std::fs::File;
+use std::ffi::OsStr;
 use hyper::Client;
 use multipart::client::lazy::Multipart;
 use regex::Regex;
 use flate2::Compression;
 use flate2::write::ZlibEncoder;
 use byteorder::{LittleEndian, WriteBytesExt};
+use glob::glob;
 
 fn read_gpx(filename: &str) -> String {
     let mut gpx_data = String::new();
@@ -156,8 +159,26 @@ fn write_mat(filename: &str, data: &[(f64,f64)]) -> std::io::Result<()> {
 }
 
 fn main() {
-    let csv = convert_gpx("/home/cluosh/work/gps/gps/test.gpx");
-    let data = parse_csv(&csv);
-    write_mat("/home/cluosh/work/gps/gps/test.mat", &data)
-        .expect("Failed to write MAT file");
+    for entry in glob("./*.gpx").unwrap() {
+        if let Ok(path) = entry {
+            let filename = path.to_str().expect("Could not read path");
+            let parentdir = path
+                .parent()
+                .expect("Already top directory")
+                .to_str()
+                .expect("Could not convert parent directory");
+            let basename = path
+                .file_stem()
+                .expect("Could not read basename")
+                .to_str()
+                .expect("Could not convert OS string");
+            let basename = String::from(parentdir) + basename + ".mat";
+            println!("Currently processing {}...", &filename);
+
+            let csv = convert_gpx(filename);
+            let data = parse_csv(&csv);
+            println!("Writing output to {}...", &basename);
+            write_mat(&basename, &data).expect("Failed to write MAT file");
+        }
+    }
 }
