@@ -4,6 +4,8 @@ version = "0.1.0"
 authors = ["Michael Pucher <michael.pucher.main@gmail.com>"]
 
 [dependencies]
+flate2 = "0.2"
 regex = "0.2"
 hyper = "0.10"
 multipart = "0.12.0"
+byteorder = "1.0.0"
