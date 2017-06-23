@@ -5,12 +5,12 @@ extern crate flate2;
 extern crate byteorder;
 extern crate glob;
 
-use std::io::Read;
-use std::io::Write;
-use std::io::BufReader;
-use std::io::BufWriter;
+use std::io::{Read, Write, BufReader, BufWriter, Error, ErrorKind};
+use std::fs;
 use std::fs::File;
-use std::ffi::OsStr;
+use std::path::Path;
+use std::process::Command;
+
 use hyper::Client;
 use multipart::client::lazy::Multipart;
 use regex::Regex;
@@ -158,27 +158,58 @@ fn write_mat(filename: &str, data: &[(f64,f64)]) -> std::io::Result<()> {
     Ok(())
 }
 
-fn main() {
-    for entry in glob("./*.gpx").unwrap() {
-        if let Ok(path) = entry {
-            let filename = path.to_str().expect("Could not read path");
-            let parentdir = path
-                .parent()
-                .expect("Already top directory")
-                .to_str()
-                .expect("Could not convert parent directory");
-            let basename = path
-                .file_stem()
-                .expect("Could not read basename")
-                .to_str()
-                .expect("Could not convert OS string");
-            let basename = String::from(parentdir) + basename + ".mat";
-            println!("Currently processing {}...", &filename);
+fn gpx_to_mat(path: &Path) {
+    let filename = path.to_str().expect("Could not read path");
+    let parentdir = path
+        .parent()
+        .expect("Already top directory")
+        .to_str()
+        .expect("Could not convert parent directory");
+    let basename = path
+        .file_stem()
+        .expect("Could not read basename")
+        .to_str()
+        .expect("Could not convert OS string");
+    let basename = String::from(parentdir) + basename + ".mat";
+    println!("Currently processing {}...", &filename);
 
-            let csv = convert_gpx(filename);
-            let data = parse_csv(&csv);
-            println!("Writing output to {}...", &basename);
-            write_mat(&basename, &data).expect("Failed to write MAT file");
+    let csv = convert_gpx(filename);
+    let data = parse_csv(&csv);
+    println!("Writing output to {}...", &basename);
+    write_mat(&basename, &data).expect("Failed to write MAT file");
+}
+
+fn fetch_gpx(filename: &str) -> std::io::Result<()> {
+    let mut gpsbabel = Command::new("gpsbabel")
+        .arg("-iskytraq")
+        .arg("-fusb:")
+        .arg("-ogpx")
+        .arg(format!("-F{}", filename))
+        .spawn()?;
+    let exit_code = gpsbabel.wait()?;
+
+    if exit_code.success() {
+        return Ok(());
+    }
+    Err(Error::new(ErrorKind::Other, ""))
+}
+
+fn main() {
+    if let Err(_) = fs::metadata("gpsbabel.exe") {
+        println!("Could not find GPSBabel, converting all GPX files in current directory...");
+        for entry in glob("./*.gpx").unwrap() {
+            if let Ok(path) = entry {
+                gpx_to_mat(&path);
+            }
+        }
+    } else {
+        let gpx_name = "tracker.gpx";
+        if let Err(_) = fetch_gpx(gpx_name) {
+            println!("Could not fetch GPX file from tracker.");
+        } else {
+            println!("Parsing...");
+            let path = Path::new(gpx_name);
+            gpx_to_mat(&path);
         }
     }
 }
