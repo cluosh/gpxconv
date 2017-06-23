@@ -1,3 +1,6 @@
+/// Tool for fetching GPX files from a GPS tracker,
+/// passing them to an online GPX conversion service
+/// and creating compressed matlab vector output.
 extern crate hyper;
 extern crate multipart;
 extern crate regex;
@@ -6,19 +9,14 @@ extern crate byteorder;
 extern crate glob;
 
 use std::io::{Read, Write, BufReader, BufWriter, Error, ErrorKind};
-use std::fs;
 use std::fs::File;
 use std::path::Path;
-use std::process::Command;
 
-use hyper::Client;
-use multipart::client::lazy::Multipart;
-use regex::Regex;
-use flate2::Compression;
-use flate2::write::ZlibEncoder;
-use byteorder::{LittleEndian, WriteBytesExt};
-use glob::glob;
-
+/// Helper for reading a GPX file
+///
+/// # Arguments
+///
+/// * `filename` - Path to the GPX file
 fn read_gpx(filename: &str) -> String {
     let mut gpx_data = String::new();
     let gpx_file = File::open(filename)
@@ -29,7 +27,24 @@ fn read_gpx(filename: &str) -> String {
     gpx_data
 }
 
+/// Convert a GPX file to a CSV file
+///
+/// # Arguments
+///
+/// * `filename` - Path to the GPX file
+///
+/// # Remarks
+///
+/// This function uses the service http://www.gpsvisualizer.com/, which
+/// is normally meant to be executed by hand, in order to
+///
+/// 1. Convert the GPX file to a CSV format
+/// 2. Correct the GPX data by using SRTM1 elevation data
 fn convert_gpx(filename: &str) -> String {
+    use hyper::Client;
+    use regex::Regex;
+    use multipart::client::lazy::Multipart;
+
     let client = Client::new();
     let gpx_data = read_gpx(filename);
     let mut html = String::new();
@@ -67,6 +82,16 @@ fn convert_gpx(filename: &str) -> String {
     csv
 }
 
+/// Turn the CSV data into a list of double precision speed and slope values.
+///
+/// # Arguments
+///
+/// * `csv` - Previously generated CSV text data as a string slice
+///
+/// # Remarks
+///
+/// It is not checked, whether we're dealing with a valid CSV, invalid
+/// rows are simply skipped. In the worst case, an empty value vector is generated.
 fn parse_csv(csv: &str) -> Vec<(f64,f64)> {
     let lines: Vec<_> = csv.split("\n").collect();
     let mut data = Vec::<(f64,f64)>::with_capacity(lines.len());
@@ -74,44 +99,61 @@ fn parse_csv(csv: &str) -> Vec<(f64,f64)> {
     for line in lines {
         let mut values = line.split(",");
         match values.nth(0) {
-            Some(t) => {
-                if t != "T" {
+            Some("T") => { },
+            _ => continue
+        }
+
+        let corrected_speed = match values.nth(4) {
+            Some("") => continue,
+            Some(speed) => {
+                if let Ok(value) = speed.parse::<f64>() {
+                    value
+                } else {
                     continue;
                 }
             }
-            None => continue,
-        }
+            _ => continue
+        };
 
-        let corrected_speed: f64;
-        match values.nth(4) {
-            Some("") => continue,
-            Some(speed) => {
-                corrected_speed = speed
-                    .parse::<f64>()
-                    .expect("Invalid value for speed in CSV");
-            }
-            None => continue,
-        }
-
-        let mut corrected_slope: f64 = 0.0;
-        match values.next() {
+        let corrected_slope = match values.next() {
             Some(slope) => {
                 if let Ok(value) = slope.parse::<f64>() {
-                    corrected_slope = value;
+                    value
+                } else {
+                    0.0
                 }
             }
-            None => continue,
-        }
+            _ => continue
+        };
 
         data.push((corrected_speed, corrected_slope));
     }
     data
 }
 
+/// Create a Matlab file from speed and slope data
+///
+/// # Arguments
+///
+/// * `filename` - Name of the Matlab file to be created
+/// * `data` - Input vector containing speed and slope of GPX data
+///
+/// # Remarks
+///
+/// The Matlab file format documentation is thorough and can be found
+/// [here](https://www.mathworks.com/help/pdf_doc/matlab/matfile_format.pdf).
+/// This function generates a little-endian Matlab 5.0 MAT-File for a 64 bit
+/// platform. The variable name for the data is always **txt** and the actual
+/// data is being compressed.
 fn write_mat(filename: &str, data: &[(f64,f64)]) -> std::io::Result<()> {
+    use byteorder::{LittleEndian, WriteBytesExt};
+    use flate2::Compression;
+    use flate2::write::ZlibEncoder;
+
     let mat = File::create(filename)
         .expect("Could not create MAT file");
     let mut writer = BufWriter::new(mat);
+    let mut gz = ZlibEncoder::new(Vec::new(), Compression::Default);
 
     // Header with description, version and endian info
     let header_text = "MATLAB 5.0 MAT-file, Platform: PCWIN64".to_string();
@@ -120,27 +162,27 @@ fn write_mat(filename: &str, data: &[(f64,f64)]) -> std::io::Result<()> {
     writer.write_all(&[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])?;
     writer.write_all(&[0x00, 0x01, 0x49, 0x4d])?;
 
-    // miMatrix
-    let mut gz = ZlibEncoder::new(Vec::new(), Compression::Default);
+    // Header for the miMatrix data type
     gz.write(&[0x0e, 0x00, 0x00, 0x00])?;
     gz.write_u32::<LittleEndian>(data.len() as u32 * 16 + 48)?;
 
-    // miUINT32, array flags
+    // Header for a miUINT32 data type, containing flags for the arrays
     gz.write(&[0x06, 0x00, 0x00, 0x00])?;
     gz.write(&[0x08, 0x00, 0x00, 0x00])?;
     gz.write(&[0x06, 0x00, 0x00, 0x00])?;
     gz.write(&[0x00, 0x00, 0x00, 0x00])?;
 
-    // miINT32
+    // Header for a miINT32 data type, containing information about the array
+    // dimensions and the number of elements
     gz.write(&[0x05, 0x00, 0x00, 0x00])?;
     gz.write(&[0x08, 0x00, 0x00, 0x00])?;
     gz.write_u32::<LittleEndian>(data.len() as u32)?;
     gz.write(&[0x02, 0x00, 0x00, 0x00])?;
 
-    // miINT8, var name
+    // Header for a list of miINT8, containing the variable name "txt"
     gz.write(&[0x01, 0x00, 0x03, 0x00, 0x74, 0x78, 0x74, 0x00])?;
 
-    // miDOUBLE, actual data
+    // The actual data stored as list of miDOUBLE data
     gz.write(&[0x09, 0x00, 0x00, 0x00])?;
     gz.write_u32::<LittleEndian>(data.len() as u32 * 16)?;
     for &(speed, _) in data {
@@ -150,7 +192,7 @@ fn write_mat(filename: &str, data: &[(f64,f64)]) -> std::io::Result<()> {
         gz.write_f64::<LittleEndian>(slope)?;
     }
 
-    // Compressed data output
+    // Compress the data and write it to the file
     let compressed_data = gz.finish()?;
     writer.write_all(&[0x0f, 0x00, 0x00, 0x00])?;
     writer.write_u32::<LittleEndian>(compressed_data.len() as u32)?;
@@ -158,6 +200,11 @@ fn write_mat(filename: &str, data: &[(f64,f64)]) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Perform the complete GPX to Matlab conversion procedure
+///
+/// # Arguments
+///
+/// * `filename` - Path object pointing to a GPX file
 fn gpx_to_mat(path: &Path) {
     let filename = path.to_str().expect("Could not read path");
     let parentdir = path
@@ -179,8 +226,19 @@ fn gpx_to_mat(path: &Path) {
     write_mat(&basename, &data).expect("Failed to write MAT file");
 }
 
+/// Start an external process using the GPSBabel tool to fetch a GPX
+/// file from an actual tracking device
+///
+/// # Arguments
+///
+/// * `filename` - Name of the file under which the fetched GPX will be stored
+///
+/// # Remarks
+///
+/// [GPSBabel](https://www.gpsbabel.org/) uses several different drivers for
+/// different GPS driver in its backend. Here, the **skytraq** driver is being used.
 fn fetch_gpx(filename: &str) -> std::io::Result<()> {
-    let mut gpsbabel = Command::new("gpsbabel")
+    let mut gpsbabel = std::process::Command::new("gpsbabel")
         .arg("-iskytraq")
         .arg("-fusb:")
         .arg("-ogpx")
@@ -194,9 +252,14 @@ fn fetch_gpx(filename: &str) -> std::io::Result<()> {
     Err(Error::new(ErrorKind::Other, ""))
 }
 
+/// Decide whether to fetch a GPX using GPSBabel or convert all GPX files
 fn main() {
+    use std::fs;
+    use glob::glob;
+
     if let Err(_) = fs::metadata("gpsbabel.exe") {
-        println!("Could not find GPSBabel, converting all GPX files in current directory...");
+        print!("Could not find GPSBabel, ");
+        println!("converting all GPX files in current directory...");
         for entry in glob("./*.gpx").unwrap() {
             if let Ok(path) = entry {
                 gpx_to_mat(&path);
@@ -207,9 +270,8 @@ fn main() {
         if let Err(_) = fetch_gpx(gpx_name) {
             println!("Could not fetch GPX file from tracker.");
         } else {
-            println!("Parsing...");
-            let path = Path::new(gpx_name);
-            gpx_to_mat(&path);
+            println!("Parsing tracker.gpx");
+            gpx_to_mat(&Path::new(gpx_name));
         }
     }
 }

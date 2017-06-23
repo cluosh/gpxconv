@@ -1,6 +1,6 @@
 [package]
 name = "gps"
-version = "0.1.0"
+version = "1.0.0"
 authors = ["Michael Pucher <michael.pucher.main@gmail.com>"]
 
 [dependencies]
