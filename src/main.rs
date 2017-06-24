@@ -204,8 +204,8 @@ fn write_mat(filename: &str, data: &[(f64,f64)]) -> std::io::Result<()> {
 ///
 /// # Arguments
 ///
-/// * `filename` - Path object pointing to a GPX file
-fn gpx_to_mat(path: &Path) {
+/// * `path` - Path object pointing to a GPX file
+pub fn gpx_to_mat(path: &Path) {
     let filename = path.to_str().expect("Could not read path");
     let parentdir = path
         .parent()
@@ -237,7 +237,7 @@ fn gpx_to_mat(path: &Path) {
 ///
 /// [GPSBabel](https://www.gpsbabel.org/) uses several different drivers for
 /// different GPS driver in its backend. Here, the **skytraq** driver is being used.
-fn fetch_gpx(filename: &str) -> std::io::Result<()> {
+pub fn fetch_gpx(filename: &str) -> std::io::Result<()> {
     let mut gpsbabel = std::process::Command::new("gpsbabel")
         .arg("-iskytraq")
         .arg("-fusb:")
